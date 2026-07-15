@@ -14,8 +14,12 @@ import re
 # ==========================================
 st.set_page_config(page_title="冷蔵庫レシピ提案アプリ Pro", page_icon="🍳", layout="wide")
 
-# 🚨【ここに貼り付け！】半角の "" の中へ、皆さんの班のAPIキー（AIzaSy...）を貼り付けてください
-API_KEY = "" 
+# 🔒【セキュリティ対応】
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    API_KEY = "" # 🚨手元のPCでテストするときはここにキーを入れてください
+
 client = genai.Client(api_key=API_KEY)
 
 # ==========================================
@@ -23,22 +27,35 @@ client = genai.Client(api_key=API_KEY)
 # ==========================================
 st.title("🍳 冷蔵庫の残り物レシピ提案アプリ Pro")
 st.write("家にある食材から、AIが5つの異なる絶品レシピを提案します。今日の気分で選びましょう！")
+
+# ✨ 変更箇所：スクショ推奨のお知らせボックスを追加
+st.info("💡 **【お知らせ】**\nこのアプリにはお気に入り登録機能がありません。もう一度作りたいお気に入りレシピに出会えた場合は、**スクリーンショットでの保存**をおすすめします！📸")
+
 st.markdown("---")
 
 # ==========================================
-# 3. 入力画面（食材・ジャンル・時間・難易度・人数）
+# アコーディオンの開閉状態を確実にコントロールする仕組み
 # ==========================================
-with st.sidebar:
-    st.header("🛒 食材・条件入力")
+if "menu_expanded" not in st.session_state:
+    st.session_state.menu_expanded = True # 最初は開いておく
+
+def close_menu():
+    st.session_state.menu_expanded = False # ボタンが押されたら閉じる命令
+
+# ==========================================
+# 3. 入力画面（メイン画面のアコーディオン）
+# ==========================================
+with st.expander("🛒 食材・条件入力（タップで開閉できます）", expanded=st.session_state.menu_expanded):
     ingredients = st.text_area(
         "1. 使い切りたい食材",
         placeholder="例: 豚肉、キャベツ、玉ねぎ",
-        height=150
+        height=100
     )
 
     genre = st.radio(
         "2. 料理のジャンル",
-        ["指定なし", "主食", "主菜", "副菜", "スープ・汁物", "デザート"]
+        ["指定なし", "主食", "主菜", "副菜", "スープ・汁物", "デザート"],
+        horizontal=True 
     )
     
     st.markdown("---")
@@ -60,7 +77,14 @@ with st.sidebar:
     with col3: difficulty_hard = st.checkbox("がっつり", value=True)
 
     st.markdown("---")
-    search_button = st.button("レシピを5つ提案してもらう！", type="primary", use_container_width=True)
+    exclusion = st.text_input(
+        "5. アレルギーや苦手な食材（あれば）",
+        placeholder="例: エビ、ピーマン、しいたけ"
+    )
+
+    st.markdown("---")
+    # ボタンが押された瞬間、AIが動く「前」にclose_menuを実行してアコーディオンを閉じる
+    search_button = st.button("レシピを5つ提案してもらう！", type="primary", use_container_width=True, on_click=close_menu)
 
 # ==========================================
 # 4. 【ボタンとAI送信処理】
@@ -69,6 +93,8 @@ if search_button:
     
     if ingredients.strip() == "":
         st.warning("食材を何か入力してください！")
+        # 何も入力されずに押された場合は、もう一度入力できるようにアコーディオンを開き直す
+        st.session_state.menu_expanded = True
         
     else:
         # 難易度の文字まとめ
@@ -78,15 +104,22 @@ if search_button:
         if difficulty_hard: selected_diff.append("がっつり")
         diff_str = ", ".join(selected_diff) if selected_diff else "指定なし"
 
-        # ✨【プロンプト】余計な挨拶・返事を完全に排除する絶対遵守命令
+        # 除外食材の文字処理
+        exclusion_str = exclusion.strip() if exclusion.strip() else "なし"
+
+        # 【プロンプト】ベースコードそのまま
         prompt = f"""
         【🚨最優先・絶対遵守命令：余計な挨拶の完全禁止】
         あなたは今、過去の会話や直前の提案をすべて忘れて記憶を完全にリセットされました。
-        出力する際、「はい、承知いたしました」「過去の記憶をリセットしました」「世界一優しい料理研究家としてサポートします」といった前置き、挨拶、確認の言葉、メタ発言は「絶対に」一切出力しないでください。
+        出力する際、「はい、承知いたしました」「過去の記憶をリセットしました」といった前置き、挨拶、確認の言葉、メタ発言は「絶対に」一切出力しないでください。
         最初の文字から、必ず指定された形式（### [絵文字] レシピのタイトル）で、いきなりレシピの本文だけを出力してください。
+        
+        【🚨最優先・絶対遵守命令：除外食材の徹底排除】
+        指定された『除外してほしい食材（アレルギー・苦手）』がある場合、**その食材をメイン具材、隠し味、調味料、出汁（だし）にいたるまで、5つのレシピすべてから「絶対に」一切排除してください。**利用者の健康と安全に関わるため、最も厳重にチェックしてください。
         
         【ユーザーの希望条件】
         - 使える食材: {ingredients}
+        - 除外してほしい食材（アレルギー・苦手）: {exclusion_str}
         - 料理のジャンル: {genre}
         - 分量: {servings}人前（全レシピで厳守）
         - 調理時間の目標値: {cooking_time}
@@ -127,7 +160,7 @@ if search_button:
         ---RECIPE_SEPARATOR---
         """
 
-        with st.spinner("🧠 5つのレシピを執筆中です...お待ちください..."):
+        with st.spinner("🧠 Geminiがアレルギーや苦手な食材に配慮した丁寧な5つのレシピを執筆中です...お待ちください..."):
             try:
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
@@ -136,7 +169,7 @@ if search_button:
                 
                 recipe_all_text = response.text
                 
-                st.success("🎉 5つのレシピが完成しました！")
+                st.success("🎉 5つの親切なレシピが完成しました！")
                 
                 # テキストを分解
                 recipe_list = re.split(r'---RECIPE_SEPARATOR---', recipe_all_text)
@@ -162,5 +195,4 @@ if search_button:
                 
             except Exception as e:
                 st.error("🚨 エラーが発生しました。時間を置いてもう一度試すか、条件を少し減らしてください。")
-                st.write(f"(エラー詳細: {e})")
                 st.write(f"(エラー詳細: {e})")
